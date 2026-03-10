@@ -103,4 +103,4 @@ def export_to_csv(data_ids: list) -> str:
     column_order = ['time', 'lat', 'lon', 'depth', 'temperature', 'salinity']
     df = df[column_order]
     
-    return df.to_csv(index=False)
+    return df.to_csv(index=False)# Export format support added
