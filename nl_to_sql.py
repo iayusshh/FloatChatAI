@@ -541,4 +541,4 @@ def test_nl_to_sql_system():
     print("\n✅ NL-to-SQL system testing completed!")
 
 if __name__ == "__main__":
-    test_nl_to_sql_system()# Natural language to SQL translation
+    test_nl_to_sql_system()
