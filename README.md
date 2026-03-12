@@ -199,7 +199,7 @@ floatchat-ai/
 - Use environment variables for all credentials
 - The `.gitignore` file excludes sensitive files automatically
 
-## 🐛 Troubleshooting
+## 🐛 Troubleshoot
 
 ### Backend Returns 500 Error
 
