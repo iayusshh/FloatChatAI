@@ -20,9 +20,16 @@ try:
 except:
     pass
 
+class CustomEmbeddingFunction:
+    def __call__(self, input):
+        embeddings = embed_model.encode(input)
+        return embeddings.tolist()
+
+ef = CustomEmbeddingFunction()
+
 collection = client.get_or_create_collection(
     name="argo_measurements",
-    embedding_function=embed_model.encode
+    embedding_function=ef
 )
 
 engine = create_engine(config.DATABASE_URL)
@@ -100,19 +107,28 @@ def create_float_aware_embeddings():
             
             # Rich metadata for retrieval
             meta = {
-                'postgres_id': int(row['id']),
-                'profile_id': int(row['profile_id']),
-                'float_id': str(row['float_id']),
-                'wmo_id': int(row['wmo_id']),
+                'postgres_id':  int(row['id']),
+                'profile_id':   int(row['profile_id']),
+                'float_id':     str(row['float_id']),
+                'wmo_id':       int(row['wmo_id']),
                 'cycle_number': int(row['cycle_number']),
-                'time': row['time'].strftime('%Y-%m-%d'),
+                'time':         row['time'].strftime('%Y-%m-%d'),
                 'profile_date': row['profile_date'].strftime('%Y-%m-%d'),
-                'depth': float(row['depth']),
-                'lat': float(row['lat']),
-                'lon': float(row['lon']),
-                'n_levels': int(row['n_levels']),
-                'has_bgc': bool(pd.notna(row['oxygen']) or pd.notna(row['ph']) or pd.notna(row['chlorophyll']))
+                'date':         row['profile_date'].strftime('%Y-%m-%d'),  # normalised alias
+                'depth':        float(row['depth']),
+                'lat':          float(row['lat']),
+                'lon':          float(row['lon']),
+                'latitude':     float(row['lat']),                          # normalised alias
+                'longitude':    float(row['lon']),                          # normalised alias
+                'n_levels':     int(row['n_levels']),
+                'has_bgc':      bool(pd.notna(row['oxygen']) or pd.notna(row['ph']) or pd.notna(row['chlorophyll'])),
+                'temperature':  float(row['temperature']) if pd.notna(row['temperature']) else None,
+                'salinity':     float(row['salinity'])    if pd.notna(row['salinity'])    else None,
+                'oxygen':       float(row['oxygen'])      if pd.notna(row['oxygen'])      else None,
+                'chlorophyll':  float(row['chlorophyll']) if pd.notna(row['chlorophyll']) else None,
             }
+            # ChromaDB doesn't allow None values in metadata — drop None fields
+            meta = {k: v for k, v in meta.items() if v is not None}
             
             documents.append(doc)
             metadatas.append(meta)
@@ -172,7 +188,7 @@ def create_profile_summaries():
     
     profile_collection = client.get_or_create_collection(
         name="argo_profiles",
-        embedding_function=embed_model.encode
+        embedding_function=ef
     )
     
     documents = []

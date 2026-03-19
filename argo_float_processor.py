@@ -109,29 +109,49 @@ def clear_existing_data():
 
     print("✅ Existing data cleared!")
 
-def simulate_real_argo_floats():
+def simulate_real_argo_floats(source_file: str = None):
     """
-    Create realistic ARGO float data structure from your gridded data
-    This simulates what real ARGO float files would look like
+    Create realistic ARGO float data structure from gridded NetCDF data.
+    Reads argo_data.cdf (preferred) or falls back to tempsal.nc.
     """
-    
-    # Load your existing data
-    ds = xr.open_dataset("tempsal.nc")
-    
-    # Create a subset limited to ~30k measurements
-    subset = ds.isel(TAXIS=slice(0, 50))  # 50 time steps
-    subset = subset.sel(XAXIS=slice(50, 120), YAXIS=slice(-30, 30))  # Larger Indian Ocean region
-    
-    # Convert to DataFrame
-    df = subset[["TEMP", "SAL"]].to_dataframe().reset_index()
-    df = df.rename(columns={
-        'TAXIS': 'time', 
-        'ZAX': 'depth', 
-        'YAXIS': 'lat', 
-        'XAXIS': 'lon', 
-        'TEMP': 'temperature',
-        'SAL': 'salinity'
-    })
+    # Resolve source file
+    if source_file is None:
+        if os.path.exists("argo_data.cdf"):
+            source_file = "argo_data.cdf"
+        elif os.path.exists("tempsal.nc"):
+            source_file = "tempsal.nc"
+        else:
+            raise FileNotFoundError(
+                "No dataset found. Run 'python generate_argo_dataset.py' first to create argo_data.cdf"
+            )
+
+    print(f"   Reading dataset: {source_file}")
+    ds = xr.open_dataset(source_file)
+
+    # Determine which BGC variables are present
+    bgc_vars = [v for v in ["OXYGEN", "CHLOROPHYLL", "PH", "NITRATE"] if v in ds]
+
+    # Subset to a manageable region and time window
+    subset = ds.isel(TAXIS=slice(0, 60))
+    subset = subset.sel(XAXIS=slice(50, 120), YAXIS=slice(-30, 30))
+
+    # Variables to extract
+    extract_vars = ["TEMP", "SAL"] + bgc_vars
+    df = subset[extract_vars].to_dataframe().reset_index()
+
+    rename_map = {
+        'TAXIS': 'time',
+        'ZAX':   'depth',
+        'YAXIS': 'lat',
+        'XAXIS': 'lon',
+        'TEMP':        'temperature',
+        'SAL':         'salinity',
+        'OXYGEN':      'oxygen',
+        'CHLOROPHYLL': 'chlorophyll',
+        'PH':          'ph',
+        'NITRATE':     'nitrate',
+    }
+    df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
     
     # Remove NaN values
     df = df.dropna()
@@ -192,17 +212,23 @@ def simulate_real_argo_floats():
             
             # Add measurements for this profile
             for _, row in time_df.iterrows():
-                measurements_data.append({
+                meas = {
                     'profile_id': profile_id,
                     'float_id': float_id,
                     'time': row['time'],
                     'lat': row['lat'],
                     'lon': row['lon'],
                     'depth': row['depth'],
-                    'pressure': row['depth'] * 1.025,  # Approximate pressure from depth
+                    'pressure': row['depth'] * 1.025,
                     'temperature': row['temperature'],
-                    'salinity': row['salinity']
-                })
+                    'salinity': row['salinity'],
+                    # BGC fields — present only if dataset contains them
+                    'oxygen':     row.get('oxygen',      None),
+                    'ph':         row.get('ph',          None),
+                    'chlorophyll':row.get('chlorophyll', None),
+                    'nitrate':    row.get('nitrate',     None),
+                }
+                measurements_data.append(meas)
             
             cycle_num += 1
             profile_counter += 1
@@ -284,14 +310,19 @@ def ingest_argo_data():
     # Step 2: Process data into float structure
     print("2. Converting gridded data to float profiles...")
     floats_df, profiles_df, measurements_df = simulate_real_argo_floats()
-    
+
     print(f"   Created {len(floats_df)} virtual floats")
     print(f"   Created {len(profiles_df)} profiles")
     print(f"   Created {len(measurements_df)} measurements")
-    
-    # Step 3: Add BGC data
-    print("3. Adding BGC parameters...")
-    measurements_df = add_realistic_bgc_data(measurements_df)
+
+    # Step 3: Add BGC data only if not already present in dataset
+    bgc_cols = {"oxygen", "ph", "chlorophyll", "nitrate"}
+    has_bgc = bgc_cols.issubset(measurements_df.columns) and measurements_df["oxygen"].notna().any()
+    if has_bgc:
+        print("3. BGC parameters already present in dataset — skipping synthetic augmentation.")
+    else:
+        print("3. Adding synthetic BGC parameters...")
+        measurements_df = add_realistic_bgc_data(measurements_df)
     
     # Step 4: Insert data into database
     print("4. Inserting data into PostgreSQL...")
