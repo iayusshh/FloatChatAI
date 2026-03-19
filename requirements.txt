@@ -1,9 +1,9 @@
 # FloatChat AI — unified requirements
 
 # Web Framework & API
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
-python-multipart==0.0.6
+fastapi>=0.115.0
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6
 
 # Frontend
 streamlit>=1.28.0
@@ -34,7 +34,7 @@ pydeck==0.8.1b0
 
 # HTTP
 requests>=2.31.0
-httpx>=0.25.0
+httpx>=0.27.0
 
 # Utilities
 python-dotenv==1.0.0
