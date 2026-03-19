@@ -6,7 +6,6 @@ RAG Pipeline: NetCDF → PostgreSQL → ChromaDB → Qwen LLM → Frontend
 import re
 import asyncio
 import config
-import ollama
 import pandas as pd
 from typing import Optional
 from sqlalchemy import create_engine
@@ -84,11 +83,36 @@ def classify(query: str) -> str:
 
 # ── LLM call (non-blocking) ───────────────────────────────────────────────────
 def _llm_sync(messages: list) -> str:
-    resp = ollama.chat(model=config.LLM_MODEL, messages=messages)
+    provider = config.LLM_PROVIDER.lower()
+
+    if provider == "groq":
+        from groq import Groq
+        client = Groq(api_key=config.GROQ_API_KEY)
+        resp = client.chat.completions.create(
+            model=config.LLM_MODEL,
+            messages=messages,
+            max_tokens=1024,
+        )
+        return resp.choices[0].message.content
+
+    if provider == "openai":
+        from openai import OpenAI
+        client = OpenAI(api_key=config.OPENAI_API_KEY)
+        resp = client.chat.completions.create(
+            model=config.LLM_MODEL,
+            messages=messages,
+            max_tokens=1024,
+        )
+        return resp.choices[0].message.content
+
+    # Default: Ollama (local)
+    import ollama as _ollama
+    resp = _ollama.chat(model=config.LLM_MODEL, messages=messages)
     return resp["message"]["content"]
 
+
 async def llm(messages: list) -> str:
-    """Run Ollama in a thread so the event loop stays free for health checks."""
+    """Run LLM in a thread so the event loop stays free for health checks."""
     return await asyncio.to_thread(_llm_sync, messages)
 
 

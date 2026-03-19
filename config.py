@@ -19,13 +19,23 @@ if not DATABASE_URL:
     else:
         DATABASE_URL = "postgresql+psycopg://nematsachdeva@localhost:5432/argo"
 
-# LLM and Embedding Configuration
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "huggingface")  # Options: huggingface, ollama
+# LLM Provider — "ollama" (local) | "groq" (cloud, free) | "openai" (cloud)
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama")
+
+# Model name — depends on provider:
+#   ollama  → gemma2:2b  (local)
+#   groq    → llama-3.1-8b-instant  (free, fast)
+#   openai  → gpt-4o-mini
+LLM_MODEL = os.getenv("LLM_MODEL", "gemma2:2b")
+
+# API keys (only needed for cloud providers)
+GROQ_API_KEY       = os.getenv("GROQ_API_KEY", "")
+OPENAI_API_KEY     = os.getenv("OPENAI_API_KEY", "")
 HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY", "")
-LLM_MODEL = os.getenv("LLM_MODEL", "Qwen/Qwen2.5-7B-Instruct")  # Hugging Face model ID for Qwen
+
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 
-# Ollama Configuration (fallback)
+# Ollama Configuration (local only)
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 
 # ChromaDB Configuration
