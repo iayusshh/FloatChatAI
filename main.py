@@ -16,8 +16,9 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy import create_engine
 
-from export_utils import export_to_ascii, export_to_netcdf, export_to_csv
-from nl_to_sql import NLToSQLTranslator, process_analytical_query
+# Imported lazily inside lifespan to avoid blocking port binding
+export_to_ascii = export_to_netcdf = export_to_csv = None
+NLToSQLTranslator = process_analytical_query = None
 
 # ── Globals (populated in lifespan) ──────────────────────────────────────────
 engine     = None
@@ -29,8 +30,29 @@ nl_translator = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global engine, collection, nl_translator
+    global export_to_ascii, export_to_netcdf, export_to_csv
+    global NLToSQLTranslator, process_analytical_query
 
     print("Starting up FloatChat AI...")
+
+    # Lazy imports — done here so port binds before any heavy work
+    try:
+        from export_utils import (
+            export_to_ascii as _ea,
+            export_to_netcdf as _en,
+            export_to_csv as _ec,
+        )
+        export_to_ascii, export_to_netcdf, export_to_csv = _ea, _en, _ec
+        print("Export utils loaded")
+    except Exception as e:
+        print(f"Export utils import failed: {e}")
+
+    try:
+        from nl_to_sql import NLToSQLTranslator as _NL, process_analytical_query as _paq
+        NLToSQLTranslator, process_analytical_query = _NL, _paq
+        print("NL-to-SQL module loaded")
+    except Exception as e:
+        print(f"NL-to-SQL import failed: {e}")
 
     # Database
     try:
@@ -41,8 +63,9 @@ async def lifespan(app: FastAPI):
 
     # NL→SQL
     try:
-        nl_translator = NLToSQLTranslator()
-        print("NL→SQL translator ready")
+        if NLToSQLTranslator:
+            nl_translator = NLToSQLTranslator()
+            print("NL→SQL translator ready")
     except Exception as e:
         print(f"NL translator init failed: {e}")
 
@@ -400,6 +423,8 @@ class ExportRequest(BaseModel):
 @app.post("/export")
 async def export_data(request: ExportRequest):
     try:
+        if export_to_ascii is None:
+            return {"error": "Export service unavailable"}
         fmt = request.format.lower()
         if fmt == "ascii":
             content   = export_to_ascii(request.data_ids)

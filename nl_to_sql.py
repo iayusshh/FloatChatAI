@@ -3,7 +3,6 @@ Production-Ready Natural Language to SQL Translation System
 Handles analytical queries for ARGO oceanographic data
 """
 
-import ollama
 from sqlalchemy import create_engine, text
 import pandas as pd
 import config
@@ -279,13 +278,35 @@ Return ONLY the SQL query without explanations or formatting:
         
         try:
             # Add timeout and simpler prompt for faster processing
-            response = ollama.chat(
-                model=config.LLM_MODEL,
-                messages=[{"role": "user", "content": prompt}],
-                options={"temperature": 0.1, "top_p": 0.9}  # More deterministic, faster
-            )
-            
-            sql_query = response["message"]["content"].strip()
+            provider = config.LLM_PROVIDER.lower()
+            if provider == "groq":
+                from groq import Groq
+                client = Groq(api_key=config.GROQ_API_KEY)
+                resp = client.chat.completions.create(
+                    model=config.LLM_MODEL,
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=512,
+                    temperature=0.1,
+                )
+                sql_query = resp.choices[0].message.content.strip()
+            elif provider == "openai":
+                from openai import OpenAI
+                client = OpenAI(api_key=config.OPENAI_API_KEY)
+                resp = client.chat.completions.create(
+                    model=config.LLM_MODEL,
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=512,
+                    temperature=0.1,
+                )
+                sql_query = resp.choices[0].message.content.strip()
+            else:
+                import ollama as _ollama
+                response = _ollama.chat(
+                    model=config.LLM_MODEL,
+                    messages=[{"role": "user", "content": prompt}],
+                    options={"temperature": 0.1, "top_p": 0.9}
+                )
+                sql_query = response["message"]["content"].strip()
             
             # Clean up formatting
             sql_query = re.sub(r'```sql\n?', '', sql_query)
