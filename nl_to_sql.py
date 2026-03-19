@@ -72,18 +72,23 @@ class NLToSQLTranslator:
             """,
             
             'regional_comparison': """
-                SELECT 
-                    CASE 
-                        WHEN lat > 0 THEN 'Northern Hemisphere'
-                        ELSE 'Southern Hemisphere'
+                SELECT
+                    CASE
+                        WHEN lon BETWEEN 20 AND 120 AND lat BETWEEN -70 AND 30  THEN 'Indian Ocean'
+                        WHEN lon BETWEEN -180 AND -70 OR lon BETWEEN 120 AND 180 THEN 'Pacific Ocean'
+                        WHEN lon BETWEEN -70 AND 20                              THEN 'Atlantic Ocean'
+                        ELSE 'Other'
                     END as region,
-                    AVG(temperature) as avg_temperature,
-                    AVG(salinity) as avg_salinity,
-                    AVG(oxygen) as avg_oxygen,
-                    COUNT(*) as measurement_count
-                FROM measurements 
+                    ROUND(AVG(temperature)::numeric, 2) as avg_temperature,
+                    ROUND(AVG(salinity)::numeric,    2) as avg_salinity,
+                    ROUND(AVG(oxygen)::numeric,      2) as avg_oxygen,
+                    COUNT(*) as measurement_count,
+                    ROUND(MIN(depth)::numeric, 0)  as min_depth_m,
+                    ROUND(MAX(depth)::numeric, 0)  as max_depth_m
+                FROM measurements
                 WHERE temperature IS NOT NULL
-                GROUP BY CASE WHEN lat > 0 THEN 'Northern Hemisphere' ELSE 'Southern Hemisphere' END;
+                GROUP BY region
+                ORDER BY measurement_count DESC;
             """,
             
             'depth_ranges': """
@@ -169,7 +174,7 @@ class NLToSQLTranslator:
         analytical_patterns = [
             # Statistical operations
             r'\b(average|mean|avg|sum|count|total|maximum|max|minimum|min)\b',
-            # Comparative operations  
+            # Comparative operations
             r'\b(compare|comparison|versus|vs|between|difference)\b',
             # Aggregation terms
             r'\b(group|aggregate|distribution|range|trend|correlation)\b',
@@ -178,9 +183,14 @@ class NLToSQLTranslator:
             # Relational terms
             r'\b(greater than|less than|higher|lower|above|below|top|bottom)\b',
             # Temporal analysis
-            r'\b(over time|temporal|monthly|yearly|seasonal)\b'
+            r'\b(over time|temporal|monthly|yearly|seasonal)\b',
+            # Parameter + location queries → always resolve with SQL
+            r'\b(temperature|salinity|oxygen|chlorophyll|ph|pressure)\b.*(at|in|near|around|of)\b',
+            r'\b(what is|show|tell me|give me).*(temperature|salinity|oxygen)\b',
+            # Ocean / region names
+            r'\b(indian ocean|pacific|atlantic|arabian sea|bay of bengal|southern ocean)\b',
         ]
-        
+
         query_lower = query.lower()
         return any(re.search(pattern, query_lower) for pattern in analytical_patterns)
     
@@ -192,7 +202,12 @@ class NLToSQLTranslator:
             if any(word in query_lower for word in ['average', 'mean']):
                 return 'avg_by_depth'
         
-        if any(word in query_lower for word in ['region', 'compare', 'hemisphere', 'north', 'south']):
+        if any(word in query_lower for word in [
+            'region', 'compare', 'hemisphere', 'north', 'south',
+            'indian ocean', 'pacific', 'atlantic', 'arabian sea',
+            'bay of bengal', 'southern ocean', 'temperature at',
+            'salinity at', 'salinity in', 'temperature in',
+        ]):
             return 'regional_comparison'
         
         if any(word in query_lower for word in ['depth range', 'surface', 'deep', 'zone']):

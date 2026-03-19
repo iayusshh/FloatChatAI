@@ -17,9 +17,21 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+_DARK = dict(
+    paper_bgcolor="rgba(0,0,0,0)",
+    plot_bgcolor="rgba(0,0,0,0)",
+    font_color="#94a3b8",
+    title_font_color="#e2e8f0",
+    title_font_size=14,
+    xaxis=dict(gridcolor="rgba(255,255,255,0.05)", linecolor="rgba(255,255,255,0.07)"),
+    yaxis=dict(gridcolor="rgba(255,255,255,0.05)", linecolor="rgba(255,255,255,0.07)"),
+)
+_PALETTE = ["#3b82f6", "#06b6d4", "#8b5cf6", "#10b981", "#f59e0b", "#ef4444"]
+
+
 class StatisticsManager:
     """Manages statistical analysis and data quality assessment for ARGO data."""
-    
+
     def __init__(self):
         """Initialize the statistics manager."""
         self.quality_flags = {
@@ -48,7 +60,8 @@ class StatisticsManager:
             9: "#000000"   # Black
         }
     
-    def generate_dataset_summary(self, data: pd.DataFrame) -> Dict[str, Any]:
+    @st.cache_data(ttl=300, show_spinner=False)
+    def generate_dataset_summary(_self, data: pd.DataFrame) -> Dict[str, Any]:
         """
         Generate comprehensive dataset summary statistics.
         
@@ -328,7 +341,8 @@ class StatisticsManager:
                     xaxis_title="Quality Flag",
                     yaxis_title="Number of Records",
                     showlegend=False,
-                    height=400
+                    height=400,
+                    **_DARK,
                 )
                 
                 fig.update_xaxes(tickangle=45)
@@ -345,7 +359,8 @@ class StatisticsManager:
                 )
                 fig.update_layout(
                     title="Data Quality Flags Distribution",
-                    height=400
+                    height=400,
+                    **_DARK,
                 )
                 return fig
                 
@@ -438,7 +453,8 @@ class StatisticsManager:
             fig.update_layout(
                 title="Parameter Statistics Summary",
                 height=600,
-                showlegend=False
+                showlegend=False,
+                **_DARK,
             )
             
             return fig
@@ -462,61 +478,76 @@ class StatisticsManager:
             data: DataFrame containing ARGO data
         """
         try:
-            st.subheader("📊 Dataset Overview")
-            
+            try:
+                from styles.government_theme import GovernmentTheme
+                _kpi = GovernmentTheme.kpi_card
+            except ImportError:
+                _kpi = None
+
             summary = self.generate_dataset_summary(data)
-            
+
             if not summary:
                 st.warning("No data available for summary")
                 return
-            
-            # Create metrics columns
-            col1, col2, col3, col4 = st.columns(4)
-            
-            with col1:
-                st.metric("Total Floats", summary.get('total_floats', 0))
-            
-            with col2:
-                st.metric("Total Profiles", summary.get('total_profiles', 0))
-            
-            with col3:
-                st.metric("Total Measurements", summary.get('total_measurements', 0))
-            
-            with col4:
-                if summary.get('quality_overview'):
-                    good_percentage = summary['quality_overview']['good_data_percentage']
-                    st.metric("Good Data %", f"{good_percentage:.1f}%")
-                else:
-                    st.metric("Good Data %", "N/A")
-            
-            # Temporal and geographic coverage
+
+            floats       = str(summary.get('total_floats', 0))
+            profiles     = f"{summary.get('total_profiles', 0):,}"
+            measurements = f"{summary.get('total_measurements', 0):,}"
+            q_ov         = summary.get('quality_overview')
+            quality      = f"{q_ov['good_data_percentage']:.1f}%" if q_ov else "N/A"
+
+            if _kpi:
+                st.markdown(
+                    f"""
+                    <div class="kpi-grid">
+                        {_kpi("Active Floats",   floats,       color="blue",   sub="ARGO platforms")}
+                        {_kpi("Total Profiles",  profiles,     color="cyan",   sub="Dive cycles")}
+                        {_kpi("Measurements",    measurements, color="purple", sub="Depth observations")}
+                        {_kpi("Data Quality",    quality,      color="green",  sub="Good data %")}
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+            else:
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("Active Floats",  floats)
+                col2.metric("Total Profiles", profiles)
+                col3.metric("Measurements",   measurements)
+                col4.metric("Data Quality",   quality)
+
+            # Coverage info in info cards
             col1, col2 = st.columns(2)
-            
             with col1:
-                st.write("**Temporal Coverage**")
+                st.markdown('<div class="section-header">Temporal Coverage</div>', unsafe_allow_html=True)
                 if summary.get('date_range'):
-                    date_range = summary['date_range']
-                    st.write(f"Start: {date_range['start'].strftime('%Y-%m-%d')}")
-                    st.write(f"End: {date_range['end'].strftime('%Y-%m-%d')}")
-                    st.write(f"Span: {date_range['span_days']} days")
+                    dr = summary['date_range']
+                    st.markdown(
+                        f"**Start:** {dr['start'].strftime('%Y-%m-%d')}  \n"
+                        f"**End:** {dr['end'].strftime('%Y-%m-%d')}  \n"
+                        f"**Span:** {dr['span_days']} days"
+                    )
                 else:
-                    st.write("No temporal data available")
-            
+                    st.caption("No temporal data available")
+
             with col2:
-                st.write("**Geographic Coverage**")
+                st.markdown('<div class="section-header">Geographic Coverage</div>', unsafe_allow_html=True)
                 if summary.get('geographic_coverage'):
                     geo = summary['geographic_coverage']
-                    st.write(f"Latitude: {geo['lat_min']:.2f}° to {geo['lat_max']:.2f}°")
-                    st.write(f"Longitude: {geo['lon_min']:.2f}° to {geo['lon_max']:.2f}°")
-                    st.write(f"Area: {geo['lat_span']:.1f}° × {geo['lon_span']:.1f}°")
+                    st.markdown(
+                        f"**Latitude:** {geo['lat_min']:.2f}° to {geo['lat_max']:.2f}°  \n"
+                        f"**Longitude:** {geo['lon_min']:.2f}° to {geo['lon_max']:.2f}°  \n"
+                        f"**Area:** {geo['lat_span']:.1f}° x {geo['lon_span']:.1f}°"
+                    )
                 else:
-                    st.write("No geographic data available")
-            
-            # Available parameters
+                    st.caption("No geographic data available")
+
             if summary.get('parameters'):
-                st.write("**Available Parameters**")
-                st.write(", ".join(summary['parameters']))
-            
+                st.markdown(
+                    f'<div style="margin-top:.75rem;font-size:.78rem;color:#64748b;">'
+                    f'Parameters: {", ".join(summary["parameters"])}</div>',
+                    unsafe_allow_html=True,
+                )
+
         except Exception as e:
             logger.error(f"Error rendering dataset overview: {e}")
             st.error(f"Error displaying dataset overview: {str(e)}")
@@ -529,7 +560,7 @@ class StatisticsManager:
             data: DataFrame containing ARGO data
         """
         try:
-            st.subheader("🔍 Data Quality Assessment")
+            st.markdown('<div class="section-header">Data Quality Assessment</div>', unsafe_allow_html=True)
             
             assessment = self.assess_data_quality(data)
             
@@ -592,7 +623,7 @@ class StatisticsManager:
             data: DataFrame containing ARGO data
         """
         try:
-            st.subheader("📈 Parameter Statistics")
+            st.markdown('<div class="section-header">Parameter Statistics</div>', unsafe_allow_html=True)
             
             # Get numeric parameters
             numeric_columns = data.select_dtypes(include=[np.number]).columns

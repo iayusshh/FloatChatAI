@@ -87,10 +87,20 @@ def export_to_netcdf(data_ids: list) -> bytes:
         'valid_max': 50.0
     }
     
-    # Save to bytes
-    buffer = BytesIO()
-    ds.to_netcdf(buffer, format='NETCDF4')
-    return buffer.getvalue()
+    # Save to bytes using a temporary file
+    import tempfile, os
+    with tempfile.NamedTemporaryFile(suffix='.nc', delete=False) as tmp:
+        temp_path = tmp.name
+        
+    try:
+        ds.to_netcdf(temp_path, format='NETCDF4')
+        with open(temp_path, 'rb') as f:
+            data = f.read()
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+            
+    return data
 
 def export_to_csv(data_ids: list) -> str:
     """Export ARGO data to CSV format"""

@@ -1,17 +1,17 @@
 """
 Chat Interface Component
-Provides conversational AI interaction with ARGO data through RAG pipeline
+Conversational AI for ARGO float data exploration via RAG pipeline
 """
 
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any
 import logging
 from datetime import datetime
 import json
-import re
+
 from dashboard_config import dashboard_config
 from components.api_client import APIClient, APIException
 from components.data_transformer import DataTransformer
@@ -20,696 +20,456 @@ from components.profile_visualizer import ProfileVisualizer
 
 logger = logging.getLogger(__name__)
 
+
+SAMPLE_QUERIES: Dict[str, List[str]] = {
+    "Location": [
+        "Show ARGO floats in the Arabian Sea",
+        "What floats are near the equator?",
+        "Find measurements in the Bay of Bengal",
+        "Where are the active floats located?",
+    ],
+    "Temperature & Salinity": [
+        "Show temperature profiles near the equator in March 2023",
+        "Compare salinity patterns across regions",
+        "Average temperature at 500 m depth",
+        "Find the warmest surface waters",
+    ],
+    "BGC & Water Quality": [
+        "Compare BGC parameters in the Arabian Sea for the last 6 months",
+        "Show oxygen levels in deep water",
+        "Areas with high chlorophyll concentration",
+        "pH levels near the surface",
+    ],
+    "Data Analysis": [
+        "Summary of available ARGO data",
+        "Compare data quality between floats",
+        "Trends in ocean temperature over time",
+        "Data coverage in the Indian Ocean",
+    ],
+}
+
+
 class ChatInterface:
     """Conversational AI interface for ARGO data exploration"""
-    
+
     def __init__(self, api_client: Optional[APIClient] = None):
-        self.api_client = api_client or st.session_state.get('api_client')
+        self.api_client = api_client or st.session_state.get("api_client")
         self.config = dashboard_config
         self.transformer = DataTransformer()
         self.map_viz = InteractiveMap()
         self.profile_viz = ProfileVisualizer()
-        
-        # Initialize chat history in session state
-        if 'chat_history' not in st.session_state:
+
+        if "chat_history" not in st.session_state:
             st.session_state.chat_history = []
-        
-        # Sample queries for user guidance
-        self.sample_queries = self._get_sample_queries()
-    
-    def render_chat_container(self) -> None: 
-        """Render the main chat interface"""
-        
-        st.subheader("💬 Ask Questions About ARGO Data")
-        
-        # Chat input area
-        col1, col2 = st.columns([4, 1])
-        
-        with col1:
-            user_query = st.text_input(
-                "Enter your question:",
-                placeholder="e.g., Show me salinity profiles near the equator in March 2023",
-                help="Ask questions about ARGO float data, locations, profiles, or oceanographic conditions"
-            )
-        
-        with col2:
-            send_button = st.button("Send", type="primary", use_container_width=True)
-        
-        # Process query
-        if send_button and user_query.strip():
-            self._process_user_query(user_query.strip())
-            st.rerun()
-        
-        # Quick action buttons
-        st.markdown("**Quick Actions:**")
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            if st.button("🗺️ Show Float Locations", use_container_width=True):
-                self._process_user_query("Show me all ARGO float locations")
-        
-        with col2:
-            if st.button("🌡️ Temperature Profiles", use_container_width=True):
-                self._process_user_query("Show me temperature profiles for recent data")
-        
-        with col3:
-            if st.button("🧂 Salinity Analysis", use_container_width=True):
-                self._process_user_query("Analyze salinity patterns in the Indian Ocean")
-        
-        with col4:
-            if st.button("📊 Data Summary", use_container_width=True):
-                self._process_user_query("Give me a summary of available ARGO data")
-        
-        st.markdown("---")
-        
-        # Sample queries section
-        self._render_sample_queries()
-        
-        st.markdown("---")
-        
-        # Chat history
+
+    # ── Public entry point ────────────────────────────────────────────────────
+
+    def render_chat_container(self) -> None:
+        """Render the full chat interface."""
+        st.markdown('<div class="section-header">ARGO Data Assistant</div>', unsafe_allow_html=True)
+
+        # --- Conversation history (chronological, oldest → newest) ---
         self._render_chat_history()
-    
-    def _process_user_query(self, query: str) -> None:
-        """Process user query through RAG pipeline and generate response"""
-        
-        if not query:
-            return
-        
-        # Add user message to history
-        user_message = {
-            'type': 'user',
-            'content': query,
-            'timestamp': datetime.now()
-        }
-        st.session_state.chat_history.append(user_message)
-        
-        # Show processing indicator
-        with st.spinner("🤖 Processing your query..."):
-            try:
-                if self.api_client:
-                    # Send query to RAG pipeline
-                    response = self.api_client.query_rag_pipeline(query)
-                    
-                    if response:
-                        # Process the response
-                        ai_message = self._create_ai_response(query, response)
-                        st.session_state.chat_history.append(ai_message)
-                        
-                        # Generate visualizations if applicable
-                        self._generate_visualizations_from_response(response, query)
-                    else:
-                        # Handle empty response
-                        error_message = {
-                            'type': 'ai',
-                            'content': "I couldn't process your query. Please try rephrasing your question.",
-                            'timestamp': datetime.now(),
-                            'error': True
-                        }
-                        st.session_state.chat_history.append(error_message)
-                
-                else:
-                    # No API client available
-                    fallback_message = {
-                        'type': 'ai',
-                        'content': "I'm currently unable to connect to the ARGO data system. Please check the system status and try again.",
-                        'timestamp': datetime.now(),
-                        'error': True
-                    }
-                    st.session_state.chat_history.append(fallback_message)
-            
-            except APIException as e:
-                error_message = {
-                    'type': 'ai',
-                    'content': f"I encountered an error processing your query: {str(e)}",
-                    'timestamp': datetime.now(),
-                    'error': True
-                }
-                st.session_state.chat_history.append(error_message)
-            
-            except Exception as e:
-                logger.error(f"Unexpected error in chat processing: {e}")
-                error_message = {
-                    'type': 'ai',
-                    'content': "I encountered an unexpected error. Please try a different question.",
-                    'timestamp': datetime.now(),
-                    'error': True
-                }
-                st.session_state.chat_history.append(error_message)
-    
-    def _create_ai_response(self, query: str, response) -> Dict[str, Any]:
-        """Create AI response message from RAG pipeline response"""
-        
-        # Extract metadata for visualization hints
-        metadata = self.transformer.extract_metadata_for_chat(response.__dict__)
-        
-        # Enhance the response with interactive elements
-        enhanced_content = self._enhance_response_content(response.answer, metadata)
-        
-        ai_message = {
-            'type': 'ai',
-            'content': enhanced_content,
-            'timestamp': datetime.now(),
-            'metadata': metadata,
-            'raw_response': response,
-            'query_type': metadata.get('query_type', 'unknown')
-        }
-        
-        return ai_message
-    
-    def _enhance_response_content(self, answer: str, metadata: Dict[str, Any]) -> str:
-        """Enhance AI response with interactive elements and formatting"""
-        
-        enhanced = answer
-        
-        # Add data context if available
-        if metadata.get('data_count', 0) > 0:
-            enhanced += f"\n\n📊 **Data Context**: Found {metadata['data_count']} relevant measurements"
-            
-            if metadata.get('float_ids'):
-                float_count = len(metadata['float_ids'])
-                enhanced += f" from {float_count} ARGO float{{'s' if float_count > 1 else ''}}"
-        
-        # Add query type information
-        query_type = metadata.get('query_type', 'unknown')
-        if query_type == 'analytical':
-            enhanced += "\n\n🔬 **Analysis Type**: Statistical/Analytical Query"
-        elif query_type == 'semantic':
-            enhanced += "\n\n🔍 **Search Type**: Semantic/Descriptive Query"
-        
-        # Add visualization hints
-        if metadata.get('postgres_ids'):
-            enhanced += "\n\n💡 **Tip**: I can create visualizations from this data. Check the charts below!"
-        
-        return enhanced
-    
-    def _generate_visualizations_from_response(self, response, query: str) -> None:
-        """Generate appropriate visualizations based on query response"""
-        
-        try:
-            metadata = self.transformer.extract_metadata_for_chat(response.__dict__)
-            
-            # Check if we have data to visualize
-            postgres_ids = metadata.get('postgres_ids', [])
-            sql_results = getattr(response, 'sql_results', None)
-            
-            if sql_results:
-                # Handle SQL results visualization
-                self._create_sql_visualizations(sql_results, query)
-            
-            elif postgres_ids and len(postgres_ids) > 0:
-                # Handle profile data visualization
-                self._create_profile_visualizations(postgres_ids[:50], query)  # Limit for performance
-            
-            else:
-                # No specific data to visualize, but maybe show general info
-                self._create_general_visualizations(query)
-        
-        except Exception as e:
-            logger.error(f"Error generating visualizations: {e}")
-            st.error("Could not generate visualizations for this query.")
-    
-    def _create_sql_visualizations(self, sql_results: List[Dict], query: str) -> None:
-        """Create visualizations from SQL query results"""
-        
-        if not sql_results:
-            return
-        
-        # Convert to DataFrame
-        df = self.transformer.sql_results_to_dataframe(sql_results)
-        
-        if df.empty:
-            return
-        
-        st.subheader("📈 Query Results Visualization")
-        
-        # Determine appropriate visualization based on columns
-        numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
-        
-        if len(numeric_cols) >= 2:
-            # Create scatter plot or line chart
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                # First chart - could be depth vs temperature
-                if 'depth' in df.columns and 'avg_temperature' in df.columns:
-                    fig = px.scatter(
-                        df, 
-                        x='avg_temperature', 
-                        y='depth',
-                        title='Temperature vs Depth',
-                        labels={'avg_temperature': 'Temperature (°C)', 'depth': 'Depth (m)'}
-                    )
-                    fig.update_yaxis(autorange="reversed")  # Oceanographic convention
-                    st.plotly_chart(fig, use_container_width=True)
-                
-                elif len(numeric_cols) >= 2:
-                    fig = px.scatter(
-                        df,
-                        x=numeric_cols[0],
-                        y=numeric_cols[1],
-                        title=f'{numeric_cols[1]} vs {numeric_cols[0]}'
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
-            
-            with col2:
-                # Second chart - could be salinity or other parameter
-                if 'depth' in df.columns and 'avg_salinity' in df.columns:
-                    fig = px.scatter(
-                        df,
-                        x='avg_salinity',
-                        y='depth', 
-                        title='Salinity vs Depth',
-                        labels={'avg_salinity': 'Salinity (PSU)', 'depth': 'Depth (m)'}
-                    )
-                    fig.update_yaxis(autorange="reversed")
-                    st.plotly_chart(fig, use_container_width=True)
-                
-                elif len(numeric_cols) >= 3:
-                    fig = px.bar(
-                        df.head(10),
-                        x=df.columns[0],
-                        y=numeric_cols[2],
-                        title=f'{numeric_cols[2]} Distribution'
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
-        
-        # Show data table
-        with st.expander("📋 View Raw Data"):
-            st.dataframe(df, use_container_width=True)
-    
-    def _create_profile_visualizations(self, postgres_ids: List[int], query: str) -> None:
-        """Create profile visualizations from measurement IDs"""
-        
-        try:
-            if not self.api_client:
-                st.warning("⚠️ No API connection available for live data visualization.")
-                return
-            
-            st.subheader("🌊 Profile Visualizations")
-            
-            with st.spinner("Loading profile data..."):
-                # Get profile data from live API
-                try:
-                    profiles_data = self.api_client.get_profiles_by_ids(postgres_ids[:20])  # Limit for performance
-                    
-                    if not profiles_data:
-                        st.info("No profile data found for the specified measurements.")
-                        return
-                    
-                    # Convert to DataFrame
-                    df = self.transformer.profiles_to_dataframe(profiles_data)
-                    
-                    if df.empty:
-                        st.info("No valid profile data could be processed.")
-                        return
-                    
-                    # Show data summary first
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric("Measurements", len(df))
-                    with col2:
-                        st.metric("Floats", df['float_id'].nunique() if 'float_id' in df.columns else 0)
-                    with col3:
-                        if 'depth' in df.columns:
-                            st.metric("Max Depth", f"{df['depth'].max():.0f}m")
-                    
-                    # Determine visualization type based on query content
-                    query_lower = query.lower()
-                    
-                    if 'location' in query_lower or 'where' in query_lower or 'map' in query_lower:
-                        self._create_location_visualization(df)
-                    elif 'profile' in query_lower or 'temperature' in query_lower or 'salinity' in query_lower:
-                        self._create_profile_plots(df)
-                    else:
-                        # Default: show both location and profile
-                        self._create_location_visualization(df)
-                        self._create_profile_plots(df)
-                
-                except APIException as e:
-                    st.error(f"API Error: {str(e)}")
-                    st.info("💡 Try a different query or check the system status.")
-                
-                except Exception as e:
-                    logger.error(f"Error fetching profile data: {e}")
-                    st.error("Could not fetch profile data from the API.")
-        
-        except Exception as e:
-            logger.error(f"Error creating profile visualizations: {e}")
-            st.error("Could not create profile visualizations.")
-    
-    def _create_location_visualization(self, df: pd.DataFrame) -> None:
-        """Create location-based visualizations"""
-        try:
-            st.write("**Float Locations**")
-            
-            # Extract location data
-            if 'latitude' in df.columns and 'longitude' in df.columns:
-                locations_df = df[['latitude', 'longitude', 'float_id']].drop_duplicates()
-                
-                if not locations_df.empty:
-                    # Create simple scatter plot on map
-                    fig = px.scatter_mapbox(
-                        locations_df,
-                        lat='latitude',
-                        lon='longitude',
-                        hover_name='float_id',
-                        zoom=3,
-                        height=400,
-                        title="ARGO Float Locations"
-                    )
-                    fig.update_layout(mapbox_style="open-street-map")
-                    st.plotly_chart(fig, use_container_width=True)
-                else:
-                    st.info("No location data available for visualization.")
-            else:
-                st.info("Location data (latitude/longitude) not available in the dataset.")
-        
-        except Exception as e:
-            logger.error(f"Error creating location visualization: {e}")
-            st.error("Could not create location visualization.")
-    
-    def _create_profile_plots(self, df: pd.DataFrame) -> None:
-        """Create profile plots from data"""
-        try:
-            st.write("**Oceanographic Profiles**")
-            
-            # Check for required columns
-            required_cols = ['depth']
-            available_params = []
-            
-            if 'temperature' in df.columns:
-                available_params.append('temperature')
-            if 'salinity' in df.columns:
-                available_params.append('salinity')
-            if 'pressure' in df.columns:
-                available_params.append('pressure')
-            
-            if not available_params or 'depth' not in df.columns:
-                st.info("Insufficient data for profile visualization. Need depth and at least one parameter (temperature/salinity).")
-                return
-            
-            # Get unique floats (limit to first 3 for performance)
-            if 'float_id' in df.columns:
-                unique_floats = df['float_id'].unique()[:3]
-                
-                for i, float_id in enumerate(unique_floats):
-                    float_data = df[df['float_id'] == float_id].copy()
-                    
-                    if len(float_data) > 0:
-                        st.write(f"**Float {float_id}**")
-                        
-                        # Create profile plots
-                        cols = st.columns(len(available_params))
-                        
-                        for j, param in enumerate(available_params):
-                            with cols[j]:
-                                # Create individual parameter profile
-                                fig = px.scatter(
-                                    float_data,
-                                    x=param,
-                                    y='depth',
-                                    title=f'{param.title()} Profile',
-                                    labels={
-                                        param: f'{param.title()} ({"°C" if param == "temperature" else "PSU" if param == "salinity" else "dbar"})',
-                                        'depth': 'Depth (m)'
-                                    }
-                                )
-                                fig.update_yaxes(autorange="reversed")  # Oceanographic convention
-                                fig.update_layout(height=400)
-                                st.plotly_chart(fig, use_container_width=True)
-            else:
-                # No float_id, create aggregate profile
-                st.write("**Aggregate Profile**")
-                
-                cols = st.columns(len(available_params))
-                
-                for j, param in enumerate(available_params):
-                    with cols[j]:
-                        fig = px.scatter(
-                            df,
-                            x=param,
-                            y='depth',
-                            title=f'{param.title()} Profile',
-                            labels={
-                                param: f'{param.title()} ({"°C" if param == "temperature" else "PSU" if param == "salinity" else "dbar"})',
-                                'depth': 'Depth (m)'
-                            }
-                        )
-                        fig.update_yaxes(autorange="reversed")
-                        fig.update_layout(height=400)
-                        st.plotly_chart(fig, use_container_width=True)
-        
-        except Exception as e:
-            logger.error(f"Error creating profile plots: {e}")
-            st.error("Could not create profile plots.")
-    
-    def _create_general_visualizations(self, query: str) -> None:
-        """Create general visualizations when no specific data is available"""
-        
-        query_lower = query.lower()
-        
-        # Show relevant general information based on query
-        if 'summary' in query_lower or 'overview' in query_lower:
-            st.subheader("📊 ARGO System Overview")
-            
-            if self.api_client:
-                try:
-                    # Get live system statistics
-                    with st.spinner("Loading system statistics..."):
-                        stats = self.api_client.get_system_statistics()
-                        
-                        col1, col2, col3, col4 = st.columns(4)
-                        with col1:
-                            st.metric("Active Floats", stats.get('active_floats', 'N/A'))
-                        with col2:
-                            st.metric("Total Profiles", stats.get('total_profiles', 'N/A'))
-                        with col3:
-                            st.metric("Measurements", f"{stats.get('total_measurements', 0):,}")
-                        with col4:
-                            st.metric("Data Quality", f"{stats.get('data_quality', 0):.1f}%")
-                        
-                        # Show recent activity if available
-                        if stats.get('recent_activity'):
-                            st.subheader("📈 Recent Activity")
-                            activity_df = pd.DataFrame(stats['recent_activity'])
-                            
-                            if not activity_df.empty:
-                                fig = px.line(
-                                    activity_df,
-                                    x='date',
-                                    y='count',
-                                    title='Recent Measurement Activity'
-                                )
-                                st.plotly_chart(fig, use_container_width=True)
-                
-                except Exception as e:
-                    logger.error(f"Error fetching system statistics: {e}")
-                    # Fallback to placeholder data
-                    self._show_placeholder_overview()
-            else:
-                self._show_placeholder_overview()
-        
-        elif 'location' in query_lower or 'where' in query_lower:
-            st.info("💡 For specific location queries, try asking about particular regions like 'Arabian Sea' or 'Bay of Bengal'")
-            
-            # Show available regions if API is connected
-            if self.api_client:
-                try:
-                    regions = self.api_client.get_available_regions()
-                    if regions:
-                        st.write("**Available Regions:**")
-                        for region in regions[:10]:  # Show first 10
-                            st.write(f"• {region}")
-                except Exception as e:
-                    logger.error(f"Error fetching regions: {e}")
-    
-    def _show_placeholder_overview(self) -> None:
-        """Show placeholder overview when live data is not available"""
+
+        st.markdown("---")
+
+        # --- Input bar at the bottom ---
+        self._render_input_bar()
+
+        st.markdown("---")
+
+        # --- Collapsible sample queries ---
+        self._render_sample_queries()
+
+    # ── Input bar ─────────────────────────────────────────────────────────────
+
+    def _render_input_bar(self) -> None:
+        col_input, col_btn = st.columns([5, 1])
+        with col_input:
+            user_query = st.text_input(
+                "Your question",
+                placeholder="e.g.  Show salinity profiles near the equator in March 2023",
+                key="chat_input",
+                label_visibility="collapsed",
+            )
+        with col_btn:
+            send = st.button("Send", type="primary", use_container_width=True)
+
+        # Quick-action chips
+        st.markdown(
+            """
+            <div class="chip-row">
+                <span class="chip" id="chip-loc">Float locations</span>
+                <span class="chip" id="chip-temp">Temperature profiles</span>
+                <span class="chip" id="chip-sal">Salinity analysis</span>
+                <span class="chip" id="chip-sum">Data summary</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.metric("Active Floats", "Loading...", "")
+            if st.button("Float locations", key="qa_loc", use_container_width=True):
+                self._process_query("Show me all ARGO float locations")
+                st.rerun()
         with col2:
-            st.metric("Total Profiles", "Loading...", "")
+            if st.button("Temperature profiles", key="qa_temp", use_container_width=True):
+                self._process_query("Show temperature profiles for recent data")
+                st.rerun()
         with col3:
-            st.metric("Measurements", "Loading...", "")
+            if st.button("Salinity analysis", key="qa_sal", use_container_width=True):
+                self._process_query("Analyze salinity patterns in the Indian Ocean")
+                st.rerun()
         with col4:
-            st.metric("Data Quality", "Loading...", "")
-        
-        st.info("⚠️ Live data connection not available. Connect to the ARGO API to see real-time statistics.")
-    
-    def _render_sample_queries(self) -> None:
-        """Render sample queries for user guidance"""
-        
-        with st.expander("💡 Example Questions You Can Ask"):
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.markdown("**🗺️ Location & Geographic Queries:**")
-                for query in self.sample_queries['location']:
-                    if st.button(f"📍 {query}", key=f"sample_loc_{hash(query)}", use_container_width=True):
-                        self._process_user_query(query)
-                
-                st.markdown("**🌡️ Temperature & Salinity:**")
-                for query in self.sample_queries['temperature_salinity']:
-                    if st.button(f"🌊 {query}", key=f"sample_ts_{hash(query)}", use_container_width=True):
-                        self._process_user_query(query)
-            
-            with col2:
-                st.markdown("**🧪 BGC & Water Quality:**")
-                for query in self.sample_queries['bgc']:
-                    if st.button(f"🔬 {query}", key=f"sample_bgc_{hash(query)}", use_container_width=True):
-                        self._process_user_query(query)
-                
-                st.markdown("**📊 Data Analysis:**")
-                for query in self.sample_queries['analysis']:
-                    if st.button(f"📈 {query}", key=f"sample_analysis_{hash(query)}", use_container_width=True):
-                        self._process_user_query(query)
-    
+            if st.button("Data summary", key="qa_sum", use_container_width=True):
+                self._process_query("Give me a summary of available ARGO data")
+                st.rerun()
+
+        if send and user_query.strip():
+            self._process_query(user_query.strip())
+            st.rerun()
+
+    # ── Chat history (chronological) ─────────────────────────────────────────
+
     def _render_chat_history(self) -> None:
-        """Render chat history with messages"""
-        
-        st.subheader("💬 Conversation History")
-        
         if not st.session_state.chat_history:
-            st.info("Start a conversation by asking a question about ARGO data!")
+            st.markdown(
+                '<div class="chat-empty">Start a conversation — ask anything about ARGO float data.</div>',
+                unsafe_allow_html=True,
+            )
             return
-        
-        # Show recent messages (last 10)
-        recent_messages = st.session_state.chat_history[-10:]
-        
-        for i, message in enumerate(reversed(recent_messages)):
-            self._render_chat_message(message, len(recent_messages) - i - 1)
-        
-        # Clear history button
-        col1, col2, col3 = st.columns([1, 1, 2])
-        with col1:
-            if st.button("🗑️ Clear History", use_container_width=True):
+
+        # Render oldest → newest (top → bottom) — correct chat convention
+        for message in st.session_state.chat_history[-20:]:
+            self._render_message(message)
+
+        # History controls
+        col_clear, col_export, _ = st.columns([1, 1, 4])
+        with col_clear:
+            if st.button("Clear history", use_container_width=True):
                 st.session_state.chat_history = []
                 st.rerun()
-        
-        with col2:
-            if st.button("📥 Export Chat", use_container_width=True):
+        with col_export:
+            if st.button("Export chat", use_container_width=True):
                 self._export_chat_history()
-    
-    def _render_chat_message(self, message: Dict[str, Any], index: int) -> None:
-        """Render individual chat message"""
-        
-        timestamp = message['timestamp'].strftime("%H:%M:%S")
-        
-        if message['type'] == 'user':
-            # User message
-            st.markdown(f"""
-            <div style="background: #e3f2fd; padding: 10px; border-radius: 10px; margin: 5px 0; border-left: 4px solid #1976d2;">
-                <strong>👤 You</strong> <small>({timestamp})</small><br>
-                {message['content']}
-            </div>
-            """, unsafe_allow_html=True)
-        
+
+    def _render_message(self, message: Dict[str, Any]) -> None:
+        ts = message["timestamp"].strftime("%H:%M")
+        content = message["content"]
+
+        if message["type"] == "user":
+            st.markdown(
+                f'<div class="chat-meta chat-meta-right">You &nbsp;&middot;&nbsp; {ts}</div>',
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                f'<div class="chat-message-user">{content}</div>',
+                unsafe_allow_html=True,
+            )
         else:
-            # AI message
-            bg_color = "#ffebee" if message.get('error') else "#f3e5f5"
-            border_color = "#d32f2f" if message.get('error') else "#7b1fa2"
-            icon = "❌" if message.get('error') else "🤖"
-            
-            st.markdown(f"""
-            <div style="background: {bg_color}; padding: 10px; border-radius: 10px; margin: 5px 0; border-left: 4px solid {border_color};">
-                <strong>{icon} ARGO Assistant</strong> <small>({timestamp})</small><br>
-                {message['content']}
-            </div>
-            """, unsafe_allow_html=True)
-            
-            # Show metadata if available
-            if message.get('metadata') and not message.get('error'):
-                metadata = message['metadata']
-                
-                if metadata.get('data_count', 0) > 0:
-                    col1, col2, col3 = st.columns(3)
-                    
-                    with col1:
-                        st.caption(f"📊 Data Points: {metadata['data_count']}")
-                    
-                    with col2:
-                        if metadata.get('float_ids'):
-                            st.caption(f"🎯 Floats: {len(metadata['float_ids'])}")
-                    
-                    with col3:
-                        st.caption(f"🔍 Type: {metadata.get('query_type', 'Unknown')}")
-    
+            extra_cls = "chat-message-error" if message.get("error") else ""
+            label = "ARGO Assistant"
+            st.markdown(
+                f'<div class="chat-meta">{label} &nbsp;&middot;&nbsp; {ts}</div>',
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                f'<div class="chat-message-ai {extra_cls}">{content}</div>',
+                unsafe_allow_html=True,
+            )
+
+            # Compact metadata strip below AI response
+            meta = message.get("metadata", {})
+            if meta and not message.get("error"):
+                cols = st.columns(3)
+                if meta.get("data_count", 0):
+                    cols[0].caption(f"Data points: {meta['data_count']}")
+                if meta.get("float_ids"):
+                    cols[1].caption(f"Floats: {len(meta['float_ids'])}")
+                if meta.get("query_type"):
+                    cols[2].caption(f"Type: {meta['query_type']}")
+
+    # ── Sample queries ────────────────────────────────────────────────────────
+
+    def _render_sample_queries(self) -> None:
+        with st.expander("Example questions"):
+            for category, queries in SAMPLE_QUERIES.items():
+                st.markdown(f"**{category}**")
+                cols = st.columns(2)
+                for i, q in enumerate(queries):
+                    with cols[i % 2]:
+                        if st.button(q, key=f"sq_{hash(q)}", use_container_width=True):
+                            self._process_query(q)
+                            st.rerun()
+
+    # ── Query processing ──────────────────────────────────────────────────────
+
+    def _process_query(self, query: str) -> None:
+        if not query:
+            return
+
+        st.session_state.chat_history.append({
+            "type": "user",
+            "content": query,
+            "timestamp": datetime.now(),
+        })
+
+        with st.spinner("Processing your query..."):
+            try:
+                if self.api_client:
+                    response = self.api_client.query_rag_pipeline(query)
+                    if response:
+                        ai_msg = self._build_ai_message(query, response)
+                        st.session_state.chat_history.append(ai_msg)
+                        self._render_visualizations(response, query)
+                    else:
+                        self._append_error("Could not process your query. Please try rephrasing.")
+                else:
+                    self._append_error(
+                        "The ARGO data system is currently unavailable. Check the system status and try again."
+                    )
+            except APIException as e:
+                self._append_error(f"API error: {e}")
+            except Exception as e:
+                logger.error(f"Chat processing error: {e}")
+                self._append_error("An unexpected error occurred. Please try a different question.")
+
+    def _append_error(self, text: str) -> None:
+        st.session_state.chat_history.append({
+            "type": "ai",
+            "content": text,
+            "timestamp": datetime.now(),
+            "error": True,
+        })
+
+    def _build_ai_message(self, query: str, response) -> Dict[str, Any]:
+        meta = self.transformer.extract_metadata_for_chat(response.__dict__)
+        content = self._format_response(response.answer, meta)
+        return {
+            "type": "ai",
+            "content": content,
+            "timestamp": datetime.now(),
+            "metadata": meta,
+            "raw_response": response,
+            "query_type": meta.get("query_type", "unknown"),
+        }
+
+    def _format_response(self, answer: str, meta: Dict[str, Any]) -> str:
+        """Clean up the answer — strip redundant AI-appended annotations."""
+        text = answer.strip()
+        count = meta.get("data_count", 0)
+        if count:
+            text += f"\n\n*{count} measurements retrieved"
+            if meta.get("float_ids"):
+                text += f" from {len(meta['float_ids'])} float(s)"
+            text += ".*"
+        return text
+
+    # ── Visualizations ────────────────────────────────────────────────────────
+
+    def _render_visualizations(self, response, query: str) -> None:
+        try:
+            meta = self.transformer.extract_metadata_for_chat(response.__dict__)
+            sql_results = getattr(response, "sql_results", None)
+            postgres_ids = meta.get("postgres_ids", [])
+
+            if sql_results:
+                self._sql_charts(sql_results, query)
+            elif postgres_ids:
+                self._profile_charts(postgres_ids[:50], query)
+            elif "summary" in query.lower() or "overview" in query.lower():
+                self._overview_charts()
+        except Exception as e:
+            logger.error(f"Visualization error: {e}")
+
+    def _sql_charts(self, sql_results: List[Dict], query: str) -> None:
+        if not sql_results:
+            return
+
+        df = self.transformer.sql_results_to_dataframe(sql_results)
+        if df.empty:
+            return
+
+        st.markdown("**Query results**")
+        numeric = df.select_dtypes(include=["number"]).columns.tolist()
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            if "depth" in df.columns and "avg_temperature" in df.columns:
+                fig = px.scatter(
+                    df, x="avg_temperature", y="depth",
+                    title="Temperature vs Depth",
+                    labels={"avg_temperature": "Temperature (°C)", "depth": "Depth (m)"},
+                    color_discrete_sequence=["#0e6ba8"],
+                )
+                fig.update_yaxes(autorange="reversed")
+                fig.update_layout(margin=dict(t=36, b=0, l=0, r=0), height=320)
+                st.plotly_chart(fig, use_container_width=True)
+            elif len(numeric) >= 2:
+                fig = px.scatter(df, x=numeric[0], y=numeric[1],
+                                 title=f"{numeric[1]} vs {numeric[0]}",
+                                 color_discrete_sequence=["#0e6ba8"])
+                fig.update_layout(margin=dict(t=36, b=0, l=0, r=0), height=320)
+                st.plotly_chart(fig, use_container_width=True)
+
+        with col2:
+            if "depth" in df.columns and "avg_salinity" in df.columns:
+                fig = px.scatter(
+                    df, x="avg_salinity", y="depth",
+                    title="Salinity vs Depth",
+                    labels={"avg_salinity": "Salinity (PSU)", "depth": "Depth (m)"},
+                    color_discrete_sequence=["#00a896"],
+                )
+                fig.update_yaxes(autorange="reversed")
+                fig.update_layout(margin=dict(t=36, b=0, l=0, r=0), height=320)
+                st.plotly_chart(fig, use_container_width=True)
+            elif len(numeric) >= 3:
+                fig = px.bar(df.head(10), x=df.columns[0], y=numeric[2],
+                             title=f"{numeric[2]} distribution",
+                             color_discrete_sequence=["#00a896"])
+                fig.update_layout(margin=dict(t=36, b=0, l=0, r=0), height=320)
+                st.plotly_chart(fig, use_container_width=True)
+
+        with st.expander("Raw data table"):
+            st.dataframe(df, use_container_width=True)
+
+    def _profile_charts(self, postgres_ids: List[int], query: str) -> None:
+        if not self.api_client:
+            st.warning("No API connection — cannot load live profile data.")
+            return
+
+        st.markdown("**Profile visualizations**")
+        with st.spinner("Loading profile data..."):
+            try:
+                profiles = self.api_client.get_profiles_by_ids(postgres_ids[:20])
+                if not profiles:
+                    st.info("No profile data found for the selected measurements.")
+                    return
+
+                df = self.transformer.profiles_to_dataframe(profiles)
+                if df.empty:
+                    st.info("Could not process profile data.")
+                    return
+
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Measurements", len(df))
+                c2.metric("Floats", df["float_id"].nunique() if "float_id" in df.columns else 0)
+                if "depth" in df.columns:
+                    c3.metric("Max depth", f"{df['depth'].max():.0f} m")
+
+                q = query.lower()
+                if any(w in q for w in ["location", "where", "map"]):
+                    self._map_chart(df)
+                elif any(w in q for w in ["profile", "temperature", "salinity"]):
+                    self._profile_plot(df)
+                else:
+                    self._map_chart(df)
+                    self._profile_plot(df)
+
+            except APIException as e:
+                st.error(f"API error: {e}")
+            except Exception as e:
+                logger.error(f"Profile fetch error: {e}")
+                st.error("Could not fetch profile data.")
+
+    def _map_chart(self, df: pd.DataFrame) -> None:
+        if "latitude" not in df.columns or "longitude" not in df.columns:
+            st.info("Location data not available.")
+            return
+        locs = df[["latitude", "longitude", "float_id"]].drop_duplicates()
+        if locs.empty:
+            return
+        fig = px.scatter_mapbox(
+            locs, lat="latitude", lon="longitude", hover_name="float_id",
+            zoom=3, height=380, title="Float locations",
+            color_discrete_sequence=["#0e6ba8"],
+        )
+        fig.update_layout(mapbox_style="open-street-map", margin=dict(t=36, b=0, l=0, r=0))
+        st.plotly_chart(fig, use_container_width=True)
+
+    def _profile_plot(self, df: pd.DataFrame) -> None:
+        params = [p for p in ["temperature", "salinity", "pressure"] if p in df.columns]
+        if not params or "depth" not in df.columns:
+            st.info("Insufficient data for profile plot.")
+            return
+
+        float_ids = df["float_id"].unique()[:3] if "float_id" in df.columns else [None]
+        for fid in float_ids:
+            subset = df[df["float_id"] == fid] if fid is not None else df
+            label = f"Float {fid}" if fid else "Aggregate"
+            st.markdown(f"**{label}**")
+            cols = st.columns(len(params))
+            for j, param in enumerate(params):
+                unit = {"temperature": "°C", "salinity": "PSU", "pressure": "dbar"}.get(param, "")
+                fig = px.scatter(
+                    subset, x=param, y="depth",
+                    title=f"{param.title()} profile",
+                    labels={param: f"{param.title()} ({unit})", "depth": "Depth (m)"},
+                    color_discrete_sequence=["#0e6ba8"],
+                )
+                fig.update_yaxes(autorange="reversed")
+                fig.update_layout(height=380, margin=dict(t=36, b=0, l=0, r=0))
+                with cols[j]:
+                    st.plotly_chart(fig, use_container_width=True)
+
+    def _overview_charts(self) -> None:
+        if not self.api_client:
+            return
+        try:
+            stats = self.api_client.get_system_statistics()
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Active floats", stats.get("active_floats", "—"))
+            c2.metric("Total profiles", stats.get("total_profiles", "—"))
+            c3.metric("Measurements", f"{stats.get('total_measurements', 0):,}")
+            c4.metric("Data quality", f"{stats.get('data_quality', 0):.1f}%")
+
+            if stats.get("recent_activity"):
+                act = pd.DataFrame(stats["recent_activity"])
+                if not act.empty:
+                    fig = px.line(act, x="date", y="count", title="Recent activity",
+                                  color_discrete_sequence=["#0e6ba8"])
+                    fig.update_layout(height=300, margin=dict(t=36, b=0, l=0, r=0))
+                    st.plotly_chart(fig, use_container_width=True)
+        except Exception as e:
+            logger.error(f"Overview chart error: {e}")
+
+    # ── Export ────────────────────────────────────────────────────────────────
+
     def _export_chat_history(self) -> None:
-        """Export chat history as downloadable file"""
-        
         if not st.session_state.chat_history:
             st.warning("No chat history to export.")
             return
-        
-        # Create export data
-        export_data = []
-        for message in st.session_state.chat_history:
-            export_data.append({
-                'timestamp': message['timestamp'].isoformat(),
-                'type': message['type'],
-                'content': message['content'],
-                'query_type': message.get('query_type', 'N/A')
-            })
-        
-        # Convert to JSON
-        export_json = json.dumps(export_data, indent=2)
-        
-        # Create download
+        rows = [
+            {
+                "timestamp": m["timestamp"].isoformat(),
+                "role": m["type"],
+                "content": m["content"],
+                "query_type": m.get("query_type", ""),
+            }
+            for m in st.session_state.chat_history
+        ]
         st.download_button(
-            label="📥 Download Chat History",
-            data=export_json,
-            file_name=f"argo_chat_history_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-            mime="application/json"
+            label="Download chat history",
+            data=json.dumps(rows, indent=2),
+            file_name=f"argo_chat_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+            mime="application/json",
         )
-    
-    def _get_sample_queries(self) -> Dict[str, List[str]]:
-        """Get sample queries organized by category"""
-        
-        return {
-            'location': [
-                "Show me ARGO floats in the Arabian Sea",
-                "What floats are near the equator?",
-                "Find measurements in the Bay of Bengal",
-                "Where are the active floats located?"
-            ],
-            'temperature_salinity': [
-                "Show me temperature profiles near the equator in March 2023",
-                "Compare salinity patterns in different regions",
-                "What's the average temperature at 500m depth?",
-                "Find the warmest surface waters"
-            ],
-            'bgc': [
-                "Compare BGC parameters in the Arabian Sea for the last 6 months",
-                "Show me oxygen levels in deep water",
-                "Find areas with high chlorophyll concentration",
-                "What are the pH levels near the surface?"
-            ],
-            'analysis': [
-                "Give me a summary of available ARGO data",
-                "Compare data quality between different floats",
-                "Show trends in ocean temperature over time",
-                "What's the data coverage in the Indian Ocean?"
-            ]
-        }
-    
+
+    # ── Statistics helper ─────────────────────────────────────────────────────
+
     def get_chat_statistics(self) -> Dict[str, Any]:
-        """Get statistics about chat usage"""
-        
-        if not st.session_state.chat_history:
+        hist = st.session_state.chat_history
+        if not hist:
             return {}
-        
-        total_messages = len(st.session_state.chat_history)
-        user_messages = len([m for m in st.session_state.chat_history if m['type'] == 'user'])
-        ai_messages = len([m for m in st.session_state.chat_history if m['type'] == 'ai'])
-        error_messages = len([m for m in st.session_state.chat_history if m.get('error')])
-        
+        user_msgs = [m for m in hist if m["type"] == "user"]
+        ai_msgs = [m for m in hist if m["type"] == "ai"]
+        errors = [m for m in ai_msgs if m.get("error")]
         return {
-            'total_messages': total_messages,
-            'user_messages': user_messages,
-            'ai_messages': ai_messages,
-            'error_messages': error_messages,
-            'success_rate': (ai_messages - error_messages) / max(ai_messages, 1) * 100
+            "total": len(hist),
+            "user": len(user_msgs),
+            "ai": len(ai_msgs),
+            "errors": len(errors),
+            "success_rate": (len(ai_msgs) - len(errors)) / max(len(ai_msgs), 1) * 100,
         }
