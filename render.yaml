@@ -1,22 +1,55 @@
 services:
-  - type: web
-    name: floatchat-frontend
-    env: python
-    buildCommand: buildCommand: export CARGO_HOME=/tmp/cargo && export RUSTUP_HOME=/tmp/rustup && pip install --upgrade pip && pip install -r requirements.txt
-    startCommand: streamlit run app.py --server.port=$PORT --server.address=0.0.0.0
-    healthCheckPath: /_stcore/health
-
+  # ── FastAPI Backend ──────────────────────────────────────────────────────────
   - type: web
     name: floatchat-backend
     env: python
-    buildCommand: export CARGO_HOME=/tmp/cargo && export RUSTUP_HOME=/tmp/rustup && pip install --upgrade pip && pip install -r backend_requirements.txt
+    region: oregon
+    plan: free
+    buildCommand: >
+      export CARGO_HOME=/tmp/cargo &&
+      export RUSTUP_HOME=/tmp/rustup &&
+      pip install --upgrade pip &&
+      pip install -r requirements.txt
     startCommand: uvicorn main:app --host=0.0.0.0 --port=$PORT
     healthCheckPath: /health
+    envVars:
+      - key: LLM_PROVIDER
+        value: groq
+      - key: LLM_MODEL
+        value: llama-3.1-8b-instant
+      - key: GROQ_API_KEY
+        sync: false          # set manually in Render dashboard
+      - key: DATABASE_URL
+        fromDatabase:
+          name: floatchat-postgres
+          property: connectionString
+      - key: CHROMA_PATH
+        value: /opt/render/project/chroma_db
+      - key: VECTOR_STORE
+        value: persistent
+      - key: MAX_DOCUMENTS
+        value: "24000"
 
-  - type: pserv
-    name: floatchat-postgres
-    env: postgresql
-    databases:
-      - name: argo
-        user: postgres
+  # ── Streamlit Frontend ───────────────────────────────────────────────────────
+  - type: web
+    name: floatchat-frontend
+    env: python
+    region: oregon
+    plan: free
+    buildCommand: >
+      pip install --upgrade pip &&
+      pip install streamlit plotly pandas requests httpx python-dotenv
+    startCommand: streamlit run streamlit_app.py --server.port=$PORT --server.address=0.0.0.0
+    healthCheckPath: /_stcore/health
+    envVars:
+      - key: BACKEND_URL
+        fromService:
+          name: floatchat-backend
+          type: web
+          property: host
 
+# ── PostgreSQL Database ──────────────────────────────────────────────────────
+databases:
+  - name: floatchat-postgres
+    plan: free
+    region: oregon
