@@ -1,12 +1,16 @@
 """Ingest real Argo GDAC data (referenced by Seanoe DOI 10.17882/42182) into PostgreSQL."""
 
 import csv
+import glob
 import io
 import os
 import random
+import sys
 import tempfile
 from datetime import date
 from typing import Dict, List, Tuple
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pandas as pd
 import requests
@@ -79,12 +83,30 @@ def fetch_profile_index(max_profiles: int) -> List[str]:
     if not records:
         raise RuntimeError("No NetCDF profile paths found in Argo index")
 
-    random.seed(42)
-    if len(records) > max_profiles:
-        records = random.sample(records, max_profiles)
+    if max_profiles and max_profiles > 0:
+        random.seed(42)
+        if len(records) > max_profiles:
+            records = random.sample(records, max_profiles)
 
     print(f"Selected {len(records)} profile files from index")
     return records
+
+
+def fetch_local_snapshot_paths(snapshot_dir: str, max_profiles: int) -> List[str]:
+    """Collect local *_Sprof.nc files from a downloaded Argo snapshot folder."""
+    pattern = os.path.join(snapshot_dir, config.ARGO_LOCAL_GLOB)
+    files = sorted(glob.glob(pattern, recursive=True))
+
+    if not files:
+        raise RuntimeError(f"No local files found with pattern: {pattern}")
+
+    if max_profiles and max_profiles > 0:
+        random.seed(42)
+        if len(files) > max_profiles:
+            files = random.sample(files, max_profiles)
+
+    print(f"Selected {len(files)} local profile files from snapshot")
+    return files
 
 
 def _extract_profile_rows(ds: xr.Dataset, source_path: str, start_profile_id: int) -> Tuple[List[Dict], List[Dict], List[Dict], int]:
@@ -216,6 +238,27 @@ def ingest_from_seanoe(max_profiles: int = None):
 
     profile_paths = fetch_profile_index(max_profiles=max_profiles)
 
+    _ingest_profile_paths(profile_paths=profile_paths, source_mode="remote")
+
+
+def ingest_from_local_snapshot(snapshot_dir: str, max_profiles: int = None):
+    """Ingest data from a locally downloaded Argo snapshot directory."""
+    max_profiles = max_profiles or config.ARGO_MAX_PROFILES
+
+    print(f"Using local snapshot folder: {snapshot_dir}")
+    print("Clearing existing ARGO data and rebuilding schema")
+    clear_existing_data()
+    create_argo_tables()
+
+    profile_paths = fetch_local_snapshot_paths(snapshot_dir=snapshot_dir, max_profiles=max_profiles)
+
+    _ingest_profile_paths(profile_paths=profile_paths, source_mode="local")
+
+
+def _ingest_profile_paths(profile_paths: List[str], source_mode: str):
+    if source_mode not in {"remote", "local"}:
+        raise ValueError("source_mode must be 'remote' or 'local'")
+
     all_floats: Dict[str, Dict] = {}
     all_profiles: List[Dict] = []
     all_measurements: List[Dict] = []
@@ -223,19 +266,27 @@ def ingest_from_seanoe(max_profiles: int = None):
     profile_id = 1
     processed = 0
 
-    for rel_path in profile_paths:
-        file_url = f"{config.ARGO_GDAC_HTTP_BASE.rstrip('/')}/{rel_path.lstrip('/')}"
+    for path_value in profile_paths:
+        file_url = path_value
+        if source_mode == "remote":
+            file_url = f"{config.ARGO_GDAC_HTTP_BASE.rstrip('/')}/{path_value.lstrip('/')}"
+
         tmp_path = None
         try:
-            response = requests.get(file_url, timeout=config.ARGO_PROFILE_TIMEOUT_SECONDS)
-            response.raise_for_status()
+            if source_mode == "remote":
+                response = requests.get(file_url, timeout=config.ARGO_PROFILE_TIMEOUT_SECONDS)
+                response.raise_for_status()
 
-            with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as tmp:
-                tmp.write(response.content)
-                tmp_path = tmp.name
+                with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as tmp:
+                    tmp.write(response.content)
+                    tmp_path = tmp.name
 
-            ds = xr.open_dataset(tmp_path, decode_times=True)
-            floats, profiles, measurements, profile_id = _extract_profile_rows(ds, rel_path, profile_id)
+                open_path = tmp_path
+            else:
+                open_path = path_value
+
+            ds = xr.open_dataset(open_path, decode_times=True)
+            floats, profiles, measurements, profile_id = _extract_profile_rows(ds, path_value, profile_id)
             ds.close()
 
             for item in floats:
@@ -287,4 +338,7 @@ def ingest_from_seanoe(max_profiles: int = None):
 
 
 if __name__ == "__main__":
-    ingest_from_seanoe()
+    if config.ARGO_LOCAL_SNAPSHOT_DIR:
+        ingest_from_local_snapshot(snapshot_dir=config.ARGO_LOCAL_SNAPSHOT_DIR)
+    else:
+        ingest_from_seanoe()
