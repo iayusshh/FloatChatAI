@@ -1,60 +1,111 @@
 """
 FloatChat AI — FastAPI Backend
-RAG Pipeline: NetCDF → PostgreSQL → ChromaDB → Qwen LLM → Frontend
+RAG Pipeline: NetCDF → PostgreSQL → ChromaDB → LLM → Frontend
 """
 
 import re
+import os
 import asyncio
+from contextlib import asynccontextmanager
+from typing import Optional
+
 import config
 import pandas as pd
-from typing import Optional
-from sqlalchemy import create_engine
 from fastapi import FastAPI
 from fastapi.responses import Response
 from pydantic import BaseModel
-import chromadb
-from sentence_transformers import SentenceTransformer
+from sqlalchemy import create_engine
+from utils.llm_provider import chat_completion
 
-from export_utils import export_to_ascii, export_to_netcdf, export_to_csv
-from nl_to_sql import NLToSQLTranslator, process_analytical_query
+print(f"PORT env var: {os.environ.get('PORT', 'NOT SET')}")
 
-# ── Database ──────────────────────────────────────────────────────────────────
-engine = create_engine(config.DATABASE_URL)
-nl_translator = NLToSQLTranslator()
+# Imported lazily inside lifespan to avoid blocking port binding
+export_to_ascii = export_to_netcdf = export_to_csv = None
+NLToSQLTranslator = process_analytical_query = None
+
+# ── Globals (populated in lifespan) ──────────────────────────────────────────
+engine     = None
+collection = None
+nl_translator = None
+
+
+# ── Background init (runs AFTER port is open) ─────────────────────────────────
+async def _background_init():
+    """Load all heavy components after the port is already bound."""
+    global engine, collection, nl_translator
+    global export_to_ascii, export_to_netcdf, export_to_csv
+    global NLToSQLTranslator, process_analytical_query
+
+    try:
+        from export_utils import (
+            export_to_ascii as _ea,
+            export_to_netcdf as _en,
+            export_to_csv as _ec,
+        )
+        export_to_ascii, export_to_netcdf, export_to_csv = _ea, _en, _ec
+        print("Export utils loaded")
+    except Exception as e:
+        print(f"Export utils import failed: {e}")
+
+    try:
+        from nl_to_sql import NLToSQLTranslator as _NL, process_analytical_query as _paq
+        NLToSQLTranslator, process_analytical_query = _NL, _paq
+        print("NL-to-SQL module loaded")
+    except Exception as e:
+        print(f"NL-to-SQL import failed: {e}")
+
+    try:
+        engine = create_engine(config.DATABASE_URL)
+        print("Database engine created")
+    except Exception as e:
+        print(f"Database init failed: {e}")
+
+    try:
+        if NLToSQLTranslator:
+            nl_translator = await asyncio.to_thread(NLToSQLTranslator)
+            print("NL→SQL translator ready")
+    except Exception as e:
+        print(f"NL translator init failed: {e}")
+
+    # ChromaDB + lightweight default embeddings (no torch dependency)
+    try:
+        import chromadb
+        from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
+
+        _ef = DefaultEmbeddingFunction()
+
+        if config.VECTOR_STORE == "persistent":
+            os.makedirs(config.CHROMA_PATH, exist_ok=True)
+            _chroma = chromadb.PersistentClient(path=config.CHROMA_PATH)
+        else:
+            _chroma = chromadb.EphemeralClient()
+
+        collection = _chroma.get_or_create_collection(
+            name="argo_measurements", embedding_function=_ef
+        )
+        print(f"ChromaDB ready — {collection.count():,} documents")
+    except Exception as e:
+        print(f"ChromaDB init failed: {e}")
+        collection = None
+
+    print("Background init complete.")
+
+
+# ── Lifespan: yields immediately so port opens, then fires background init ────
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print("FloatChat AI starting — port binding now.")
+    asyncio.create_task(_background_init())
+    yield
+    print("Shutting down.")
+
 
 # ── FastAPI ───────────────────────────────────────────────────────────────────
 app = FastAPI(
     title="FloatChat AI",
     description="RAG pipeline for ARGO oceanographic float data",
+    lifespan=lifespan,
 )
-
-# ── ChromaDB + Embeddings ─────────────────────────────────────────────────────
-try:
-    _embed_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
-
-    class _EmbedFn:
-        def __call__(self, input):
-            if isinstance(input, str):
-                input = [input]
-            return _embed_model.encode(input).tolist()
-
-    _ef = _EmbedFn()
-
-    # Use persistent storage locally; fall back to ephemeral on cloud (no disk)
-    if config.VECTOR_STORE == "persistent":
-        import os
-        os.makedirs(config.CHROMA_PATH, exist_ok=True)
-        _chroma = chromadb.PersistentClient(path=config.CHROMA_PATH)
-    else:
-        _chroma = chromadb.EphemeralClient()
-
-    collection = _chroma.get_or_create_collection(
-        name="argo_measurements", embedding_function=_ef
-    )
-    print(f"ChromaDB ready — {collection.count():,} documents")
-except Exception as e:
-    print(f"ChromaDB init failed: {e}")
-    collection = None
 
 
 # ── Query classifier ──────────────────────────────────────────────────────────
@@ -77,13 +128,11 @@ _DATA_RE = re.compile(
 
 
 def classify(query: str) -> str:
-    """Return 'chat' for general conversation, 'data' for oceanographic queries."""
     q = query.strip()
     if _CHAT_RE.match(q):
         return "chat"
     if _DATA_RE.search(q):
         return "data"
-    # Short vague messages → chat
     if len(q.split()) <= 3:
         return "chat"
     return "data"
@@ -91,45 +140,15 @@ def classify(query: str) -> str:
 
 # ── LLM call (non-blocking) ───────────────────────────────────────────────────
 def _llm_sync(messages: list) -> str:
-    provider = config.LLM_PROVIDER.lower()
-
-    if provider == "groq":
-        from groq import Groq
-        client = Groq(api_key=config.GROQ_API_KEY)
-        resp = client.chat.completions.create(
-            model=config.LLM_MODEL,
-            messages=messages,
-            max_tokens=1024,
-        )
-        return resp.choices[0].message.content
-
-    if provider == "openai":
-        from openai import OpenAI
-        client = OpenAI(api_key=config.OPENAI_API_KEY)
-        resp = client.chat.completions.create(
-            model=config.LLM_MODEL,
-            messages=messages,
-            max_tokens=1024,
-        )
-        return resp.choices[0].message.content
-
-    # Default: Ollama (local)
-    import ollama as _ollama
-    resp = _ollama.chat(model=config.LLM_MODEL, messages=messages)
-    return resp["message"]["content"]
+    return chat_completion(messages=messages, max_tokens=1024, temperature=0.1)
 
 
 async def llm(messages: list) -> str:
-    """Run LLM in a thread so the event loop stays free for health checks."""
     return await asyncio.to_thread(_llm_sync, messages)
 
 
 # ── RAG retrieval + answer ────────────────────────────────────────────────────
 async def rag_answer(query: str) -> dict:
-    """
-    Retrieve top-20 relevant documents from ChromaDB and answer with Qwen.
-    Anti-hallucination: LLM is told to use ONLY the retrieved data.
-    """
     if collection is None:
         return {
             "answer": "Vector database is unavailable. Please check ChromaDB.",
@@ -141,7 +160,6 @@ async def rag_answer(query: str) -> dict:
     docs  = results["documents"][0]
     metas = results["metadatas"][0]
 
-    # Build a structured context table from metadata
     rows = []
     for i, (_, m) in enumerate(zip(docs, metas), 1):
         row = f"[{i}]"
@@ -157,7 +175,6 @@ async def rag_answer(query: str) -> dict:
 
     context = "\n".join(rows)
 
-    # Inline statistics
     temps = [m["temperature"] for m in metas if m.get("temperature") is not None]
     sals  = [m["salinity"]    for m in metas if m.get("salinity")    is not None]
     stats = []
@@ -207,10 +224,8 @@ async def rag_answer(query: str) -> dict:
 
 # ── SQL analytical answer ─────────────────────────────────────────────────────
 async def sql_answer(query: str) -> Optional[dict]:
-    """
-    Run NL→SQL for aggregation queries.
-    Returns None if SQL fails or returns empty — caller falls back to RAG.
-    """
+    if nl_translator is None:
+        return None
     try:
         if not nl_translator.is_analytical_query(query):
             return None
@@ -260,6 +275,11 @@ async def sql_answer(query: str) -> Optional[dict]:
 # Endpoints
 # ══════════════════════════════════════════════════════════════════════════════
 
+@app.get("/")
+async def root():
+    return {"status": "ok", "service": "FloatChat AI"}
+
+
 @app.get("/health")
 async def health_check():
     chroma_ok = collection is not None
@@ -295,7 +315,6 @@ async def query_endpoint(request: QueryRequest):
 
     kind = classify(query)
 
-    # ── General conversation ──────────────────────────────────────────────────
     if kind == "chat":
         system = (
             "You are FloatChat AI, a friendly assistant for an ARGO oceanographic "
@@ -311,17 +330,13 @@ async def query_endpoint(request: QueryRequest):
             retrieved_metadata=[{"query_type": "chat"}],
         )
 
-    # ── Data query: try SQL first (aggregation), then RAG ────────────────────
     sql_result = await sql_answer(query)
     if sql_result:
         return QueryResponse(**sql_result)
 
-    # ── RAG: semantic retrieval + Qwen ────────────────────────────────────────
     rag_result = await rag_answer(query)
     return QueryResponse(**rag_result)
 
-
-# ── Supporting endpoints ──────────────────────────────────────────────────────
 
 class ProfileRequest(BaseModel):
     ids: list[int]
@@ -385,6 +400,8 @@ class ExportRequest(BaseModel):
 @app.post("/export")
 async def export_data(request: ExportRequest):
     try:
+        if export_to_ascii is None:
+            return {"error": "Export service unavailable"}
         fmt = request.format.lower()
         if fmt == "ascii":
             content   = export_to_ascii(request.data_ids)
@@ -421,7 +438,7 @@ async def system_statistics():
             engine,
         )
         row = stats.to_dict("records")[0]
-        row["data_quality"] = 95.0  # placeholder — flag analysis would compute real value
+        row["data_quality"] = 95.0
         return row
     except Exception as e:
         return {"error": str(e)}
