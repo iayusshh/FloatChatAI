@@ -67,4 +67,6 @@ ARGO_GDAC_HTTP_BASE = os.getenv("ARGO_GDAC_HTTP_BASE", "https://data-argo.ifreme
 ARGO_INDEX_PATH = os.getenv("ARGO_INDEX_PATH", "argo_synthetic-profile_index.txt")
 ARGO_MAX_PROFILES = int(os.getenv("ARGO_MAX_PROFILES", "250"))
 ARGO_PROFILE_TIMEOUT_SECONDS = int(os.getenv("ARGO_PROFILE_TIMEOUT_SECONDS", "25"))
+ARGO_LOCAL_SNAPSHOT_DIR = os.getenv("ARGO_LOCAL_SNAPSHOT_DIR", "")
+ARGO_LOCAL_GLOB = os.getenv("ARGO_LOCAL_GLOB", "dac/**/*_Sprof.nc")
 
