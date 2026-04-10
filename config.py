@@ -56,3 +56,11 @@ MAX_FLOATS = int(os.getenv("MAX_FLOATS", "1000"))  # Increased for virtual float
 MAX_DOCUMENTS = int(os.getenv("MAX_DOCUMENTS", "30000"))  # Limited to 30k as requested
 BATCH_SIZE = int(os.getenv("BATCH_SIZE", "1000"))
 
+# Argo GDAC / Seanoe dataset ingestion
+ARGO_DATA_SOURCE_URL = os.getenv("ARGO_DATA_SOURCE_URL", "https://www.seanoe.org/data/00311/42182/")
+ARGO_GDAC_HTTP_BASE = os.getenv("ARGO_GDAC_HTTP_BASE", "https://data-argo.ifremer.fr/")
+ARGO_INDEX_PATH = os.getenv("ARGO_INDEX_PATH", "argo_synthetic-profile_index.txt")
+ARGO_MAX_PROFILES = int(os.getenv("ARGO_MAX_PROFILES", "250"))
+ARGO_PROFILE_TIMEOUT_SECONDS = int(os.getenv("ARGO_PROFILE_TIMEOUT_SECONDS", "25"))
+ARGO_LOCAL_SNAPSHOT_DIR = os.getenv("ARGO_LOCAL_SNAPSHOT_DIR", "")
+ARGO_LOCAL_GLOB = os.getenv("ARGO_LOCAL_GLOB", "dac/**/*_Sprof.nc")
