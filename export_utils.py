@@ -10,7 +10,8 @@ from datetime import datetime
 from sqlalchemy import create_engine
 import config
 
-engine = create_engine(config.DATABASE_URL)
+def _get_engine():
+    return create_engine(config.DATABASE_URL)
 
 def export_to_ascii(data_ids: list) -> str:
     """Export ARGO data to ASCII format following oceanographic standards"""
@@ -18,7 +19,7 @@ def export_to_ascii(data_ids: list) -> str:
     # Fetch data from PostgreSQL
     ids_tuple = tuple(data_ids)
     sql_query = "SELECT * FROM measurements WHERE id IN %s ORDER BY time, depth;"
-    df = pd.read_sql_query(sql_query, engine, params=(ids_tuple,))
+    df = pd.read_sql_query(sql_query, _get_engine(), params=(ids_tuple,))
     
     # Create ASCII output following ARGO format conventions
     output = StringIO()
@@ -48,7 +49,7 @@ def export_to_netcdf(data_ids: list) -> bytes:
     # Fetch data from PostgreSQL
     ids_tuple = tuple(data_ids)
     sql_query = "SELECT * FROM measurements WHERE id IN %s ORDER BY time, depth;"
-    df = pd.read_sql_query(sql_query, engine, params=(ids_tuple,))
+    df = pd.read_sql_query(sql_query, _get_engine(), params=(ids_tuple,))
     
     # Convert to xarray Dataset
     ds = xr.Dataset({
@@ -107,7 +108,7 @@ def export_to_csv(data_ids: list) -> str:
     
     ids_tuple = tuple(data_ids)
     sql_query = "SELECT * FROM measurements WHERE id IN %s ORDER BY time, depth;"
-    df = pd.read_sql_query(sql_query, engine, params=(ids_tuple,))
+    df = pd.read_sql_query(sql_query, _get_engine(), params=(ids_tuple,))
     
     # Reorder columns for better readability
     column_order = ['time', 'lat', 'lon', 'depth', 'temperature', 'salinity']
